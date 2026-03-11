@@ -181,6 +181,7 @@ function App() {
   const [wAns, setWAns] = useState({});
   const [hints, setHints] = useState({});
   const [view, setView] = useState({ t: "home" });
+  const [tab, setTab] = useState("lessons");
 
   const totalL = allLessons.length;
   const doneC = Object.keys(done).length;
@@ -190,7 +191,7 @@ function App() {
   const isModDone = (m) => m.lessons.every(l => done[l.id]);
   const dayProg = (d) => { let c = 0; d.modules.forEach(m => m.lessons.forEach(l => { if (done[l.id]) c++; })); return c; };
   const dayTotal = (d) => { let c = 0; d.modules.forEach(m => c += m.lessons.length); return c; };
-  const nav = (v) => { setView(v); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  const nav = (v) => { setView(v); if (v.t === "mod") setTab("lessons"); window.scrollTo({ top: 0, behavior: "smooth" }); };
   const nextL = (id) => { const i = allLessons.indexOf(id); return i >= 0 && i < allLessons.length - 1 ? allLessons[i + 1] : null; };
   const findL = (id) => { for (const d of TRAINING_DATA.days) for (const m of d.modules) { const l = m.lessons.find(l => l.id === id); if (l) return { d, m, l }; } return null; };
   const findM = (id) => { for (const d of TRAINING_DATA.days) { const m = d.modules.find(m => m.id === id); if (m) return { d, m }; } return null; };
@@ -272,7 +273,6 @@ function App() {
   const renderMod = (mid) => {
     const ctx = findM(mid); if (!ctx) return null;
     const { d: day, m: mod } = ctx;
-    const [tab, setTab] = useState("lessons");
     const accent = MODULE_ACCENT[mid] || "#5B0E2D";
     return (
       <div className="max-w-3xl mx-auto px-4 py-8">
