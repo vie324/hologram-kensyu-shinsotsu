@@ -293,6 +293,115 @@ function App() {
     setDashLoading(false);
   };
 
+  // ── 管理者ダッシュボード ──
+  const renderDashboard = () => (
+    <div style={{ minHeight: "100vh", backgroundColor: "#FAF6F1" }}>
+      <div className="px-4 py-3 flex items-center gap-3" style={{ borderBottom: "1px solid rgba(201,145,138,0.15)", backgroundColor: "#fff" }}>
+        <button onClick={() => nav({ t: "home" })} className="w-8 h-8 flex items-center justify-center rounded-full" style={{ color: "#5B0E2D" }}>{Icons.chevLeft}</button>
+        <div style={{ fontSize: 16, fontWeight: 600, color: "#5B0E2D" }}>管理者ダッシュボード</div>
+        <button onClick={loadDashboard} className="ml-auto px-3 py-1.5 rounded-lg" style={{ fontSize: 11, color: "#5B6E82", backgroundColor: "rgba(91,110,130,0.08)" }}>更新</button>
+      </div>
+      <div className="p-4 max-w-2xl mx-auto">
+        {!GAS_URL ? (
+          <div className="bg-white rounded-2xl p-6 text-center" style={{ border: "1px solid rgba(201,145,138,0.2)" }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#5B0E2D", marginBottom: 8 }}>GAS連携が未設定です</div>
+            <div style={{ fontSize: 12, color: "#8C7B72", lineHeight: 1.8 }}>index.html の GAS_URL にデプロイ済みのGoogle Apps Script WebアプリURLを設定してください。</div>
+          </div>
+        ) : dashLoading ? (
+          <div className="text-center py-16"><div style={{ fontSize: 13, color: "#8C7B72" }}>読み込み中...</div></div>
+        ) : !dashData ? (
+          <div className="text-center py-16">
+            <button onClick={loadDashboard} className="px-6 py-3 rounded-xl text-white font-semibold" style={{ fontSize: 13, background: "linear-gradient(135deg, #5B6E82 0%, #7A8FA0 100%)" }}>データを読み込む</button>
+          </div>
+        ) : (
+          <div>
+            <FadeIn>
+              <div className="grid grid-cols-3 gap-3 mb-6">
+                {[
+                  { label: "受講者数", value: dashData.trainees?.length || 0, unit: "名" },
+                  { label: "全員完了", value: dashData.trainees?.filter(t => t.progressRate === "100%").length || 0, unit: "名" },
+                  { label: "直近ログ", value: dashData.recentLogs?.length || 0, unit: "件" },
+                ].map((s, i) => (
+                  <div key={i} className="bg-white rounded-2xl p-4 text-center" style={{ border: "1px solid rgba(201,145,138,0.15)" }}>
+                    <div style={{ fontSize: 10, color: "#8C7B72", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>{s.label}</div>
+                    <div style={{ fontSize: 28, fontWeight: 300, color: "#5B0E2D", fontFamily: "'Cormorant Garamond', serif" }}>{s.value}<span style={{ fontSize: 12, color: "#8C7B72" }}>{s.unit}</span></div>
+                  </div>
+                ))}
+              </div>
+            </FadeIn>
+            <FadeIn delay={100}>
+              <div className="mb-6">
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#5B0E2D", marginBottom: 12 }}>受講者別進捗</div>
+                {dashData.trainees && dashData.trainees.length > 0 ? dashData.trainees.map((t, i) => {
+                  const pct = parseInt(t.progressRate) || 0;
+                  return (
+                    <div key={i} className="bg-white rounded-2xl p-4 mb-3" style={{ border: "1px solid rgba(201,145,138,0.15)" }}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span style={{ fontSize: 14, fontWeight: 600, color: "#2D2D2D" }}>{t.name}</span>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: pct === 100 ? "#6B7F5C" : pct >= 50 ? "#A67C52" : "#C9918A" }}>{t.progressRate}</span>
+                      </div>
+                      <div className="w-full rounded-full mb-3" style={{ height: 6, backgroundColor: "rgba(201,145,138,0.15)" }}>
+                        <div className="rounded-full transition-all" style={{ height: 6, width: pct + "%", background: pct === 100 ? "linear-gradient(90deg, #6B7F5C, #8DA076)" : "linear-gradient(90deg, #C9918A, #D4A59E)" }} />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 mb-2">
+                        {[["STEP 1", t.day1], ["STEP 2", t.day2], ["STEP 3", t.day3]].map(([label, val]) => (
+                          <div key={label} className="text-center py-1.5 rounded-lg" style={{ backgroundColor: "rgba(201,145,138,0.06)", fontSize: 11 }}>
+                            <div style={{ color: "#8C7B72", fontWeight: 600 }}>{label}</div>
+                            <div style={{ color: "#5B0E2D", fontWeight: 600 }}>{val}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex gap-4" style={{ fontSize: 11, color: "#8C7B72" }}>
+                        <span>レッスン: {t.completedLessons}/{t.totalLessons}</span>
+                        <span>クイズ: {t.completedQuizzes}/{t.totalQuizzes} ({t.quizRate})</span>
+                        <span>記述: {t.writtenCount}件</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: "#bbb", marginTop: 4 }}>最終: {t.lastAccess}</div>
+                    </div>
+                  );
+                }) : (
+                  <div className="bg-white rounded-2xl p-6 text-center" style={{ border: "1px solid rgba(201,145,138,0.15)", fontSize: 13, color: "#8C7B72" }}>まだ受講者データがありません</div>
+                )}
+              </div>
+            </FadeIn>
+            <FadeIn delay={200}>
+              <div className="mb-6">
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#5B0E2D", marginBottom: 12 }}>直近アクティビティ</div>
+                {dashData.recentLogs && dashData.recentLogs.length > 0 ? (
+                  <div className="bg-white rounded-2xl overflow-hidden" style={{ border: "1px solid rgba(201,145,138,0.15)" }}>
+                    {dashData.recentLogs.slice(0, 20).map((log, i) => (
+                      <div key={i} className="px-4 py-3 flex items-start gap-3" style={{ borderBottom: i < 19 ? "1px solid rgba(201,145,138,0.08)" : "none" }}>
+                        <div className="w-2 h-2 rounded-full mt-1.5 flex-shrink-0" style={{ backgroundColor: log.type === "lesson_complete" ? "#6B7F5C" : log.type === "quiz_submit" ? (log.quizPassed === "合格" ? "#A67C52" : "#C9918A") : "#5B6E82" }} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span style={{ fontSize: 12, fontWeight: 600, color: "#2D2D2D" }}>{log.name}</span>
+                            <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, fontWeight: 600, backgroundColor: log.type === "lesson_complete" ? "rgba(107,127,92,0.1)" : log.type === "quiz_submit" ? "rgba(166,124,82,0.1)" : "rgba(91,110,130,0.1)", color: log.type === "lesson_complete" ? "#6B7F5C" : log.type === "quiz_submit" ? "#A67C52" : "#5B6E82" }}>
+                              {log.type === "lesson_complete" ? "レッスン完了" : log.type === "quiz_submit" ? "クイズ " + log.quizPassed : "記述提出"}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 11, color: "#8C7B72" }}>{log.moduleName}{log.lessonName ? " / " + log.lessonName : ""}{log.quizCorrect ? " (" + log.quizCorrect + "/" + log.quizTotal + ")" : ""}</div>
+                          {log.writtenAnswer && (
+                            <div className="mt-1 p-2 rounded-lg" style={{ fontSize: 11, color: "#5B0E2D", backgroundColor: "rgba(201,145,138,0.06)", lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 80, overflow: "hidden" }}>
+                              {log.writtenAnswer.substring(0, 200)}{log.writtenAnswer.length > 200 ? "..." : ""}
+                            </div>
+                          )}
+                          <div style={{ fontSize: 10, color: "#bbb", marginTop: 2 }}>{log.timestamp}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-2xl p-6 text-center" style={{ border: "1px solid rgba(201,145,138,0.15)", fontSize: 13, color: "#8C7B72" }}>まだログがありません</div>
+                )}
+              </div>
+            </FadeIn>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+
   // ── HOME ──
   const renderHome = () => (
     <div>
@@ -564,6 +673,7 @@ function App() {
       {view.t === "home" && renderHome()}
       {view.t === "mod" && renderMod(view.id)}
       {view.t === "lesson" && renderLesson(view.id)}
+      {view.t === "dashboard" && renderDashboard()}
 
       <footer className="text-center py-12" style={{ fontSize: 11, color: "#bbb", letterSpacing: "0.08em" }}>
         <p>HOLOGRAM / 株式会社Uluu</p>
@@ -578,129 +688,6 @@ function App() {
     root.render(React.createElement(App));
   </script>
 </body>
-  // ── 管理者ダッシュボード ──
-  const renderDashboard = () => (
-    <div style={{ minHeight: "100vh", backgroundColor: "#FAF6F1" }}>
-      <div className="px-4 py-3 flex items-center gap-3" style={{ borderBottom: "1px solid rgba(201,145,138,0.15)", backgroundColor: "#fff" }}>
-        <button onClick={() => nav({ t: "home" })} className="w-8 h-8 flex items-center justify-center rounded-full" style={{ color: "#5B0E2D" }}>{Icons.chevLeft}</button>
-        <div style={{ fontSize: 16, fontWeight: 600, color: "#5B0E2D" }}>管理者ダッシュボード</div>
-        <button onClick={loadDashboard} className="ml-auto px-3 py-1.5 rounded-lg" style={{ fontSize: 11, color: "#5B6E82", backgroundColor: "rgba(91,110,130,0.08)" }}>
-          更新
-        </button>
-      </div>
-
-      <div className="p-4 max-w-2xl mx-auto">
-        {!GAS_URL ? (
-          <div className="bg-white rounded-2xl p-6 text-center" style={{ border: "1px solid rgba(201,145,138,0.2)" }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: "#5B0E2D", marginBottom: 8 }}>GAS連携が未設定です</div>
-            <div style={{ fontSize: 12, color: "#8C7B72", lineHeight: 1.8 }}>
-              index.html の GAS_URL にデプロイ済みのGoogle Apps Script WebアプリURLを設定してください。<br/>
-              詳しくは gas/Code.gs のセットアップ手順をご確認ください。
-            </div>
-          </div>
-        ) : dashLoading ? (
-          <div className="text-center py-16"><div style={{ fontSize: 13, color: "#8C7B72" }}>読み込み中...</div></div>
-        ) : !dashData ? (
-          <div className="text-center py-16">
-            <button onClick={loadDashboard} className="px-6 py-3 rounded-xl text-white font-semibold" style={{ fontSize: 13, background: "linear-gradient(135deg, #5B6E82 0%, #7A8FA0 100%)" }}>
-              データを読み込む
-            </button>
-          </div>
-        ) : (
-          <div>
-            {/* 全体統計 */}
-            <FadeIn>
-              <div className="grid grid-cols-3 gap-3 mb-6">
-                {[
-                  { label: "受講者数", value: dashData.trainees?.length || 0, unit: "名" },
-                  { label: "全員完了", value: dashData.trainees?.filter(t => t.progressRate === "100%").length || 0, unit: "名" },
-                  { label: "直近ログ", value: dashData.recentLogs?.length || 0, unit: "件" },
-                ].map((s, i) => (
-                  <div key={i} className="bg-white rounded-2xl p-4 text-center" style={{ border: "1px solid rgba(201,145,138,0.15)" }}>
-                    <div style={{ fontSize: 10, color: "#8C7B72", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>{s.label}</div>
-                    <div style={{ fontSize: 28, fontWeight: 300, color: "#5B0E2D", fontFamily: "'Cormorant Garamond', serif" }}>{s.value}<span style={{ fontSize: 12, color: "#8C7B72" }}>{s.unit}</span></div>
-                  </div>
-                ))}
-              </div>
-            </FadeIn>
-
-            {/* 受講者別進捗 */}
-            <FadeIn delay={100}>
-              <div className="mb-6">
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#5B0E2D", marginBottom: 12 }}>受講者別進捗</div>
-                {dashData.trainees && dashData.trainees.length > 0 ? dashData.trainees.map((t, i) => {
-                  const pct = parseInt(t.progressRate) || 0;
-                  return (
-                    <div key={i} className="bg-white rounded-2xl p-4 mb-3" style={{ border: "1px solid rgba(201,145,138,0.15)" }}>
-                      <div className="flex items-center justify-between mb-2">
-                        <span style={{ fontSize: 14, fontWeight: 600, color: "#2D2D2D" }}>{t.name}</span>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: pct === 100 ? "#6B7F5C" : pct >= 50 ? "#A67C52" : "#C9918A" }}>{t.progressRate}</span>
-                      </div>
-                      <div className="w-full rounded-full mb-3" style={{ height: 6, backgroundColor: "rgba(201,145,138,0.15)" }}>
-                        <div className="rounded-full transition-all" style={{ height: 6, width: pct + "%", background: pct === 100 ? "linear-gradient(90deg, #6B7F5C, #8DA076)" : "linear-gradient(90deg, #C9918A, #D4A59E)" }} />
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 mb-2">
-                        {[["STEP 1", t.day1], ["STEP 2", t.day2], ["STEP 3", t.day3]].map(([label, val]) => (
-                          <div key={label} className="text-center py-1.5 rounded-lg" style={{ backgroundColor: "rgba(201,145,138,0.06)", fontSize: 11 }}>
-                            <div style={{ color: "#8C7B72", fontWeight: 600 }}>{label}</div>
-                            <div style={{ color: "#5B0E2D", fontWeight: 600 }}>{val}</div>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="flex gap-4" style={{ fontSize: 11, color: "#8C7B72" }}>
-                        <span>レッスン: {t.completedLessons}/{t.totalLessons}</span>
-                        <span>クイズ: {t.completedQuizzes}/{t.totalQuizzes} ({t.quizRate})</span>
-                        <span>記述: {t.writtenCount}件</span>
-                      </div>
-                      <div style={{ fontSize: 10, color: "#bbb", marginTop: 4 }}>最終: {t.lastAccess}</div>
-                    </div>
-                  );
-                }) : (
-                  <div className="bg-white rounded-2xl p-6 text-center" style={{ border: "1px solid rgba(201,145,138,0.15)", fontSize: 13, color: "#8C7B72" }}>まだ受講者データがありません</div>
-                )}
-              </div>
-            </FadeIn>
-
-            {/* 直近アクティビティ */}
-            <FadeIn delay={200}>
-              <div className="mb-6">
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#5B0E2D", marginBottom: 12 }}>直近アクティビティ</div>
-                {dashData.recentLogs && dashData.recentLogs.length > 0 ? (
-                  <div className="bg-white rounded-2xl overflow-hidden" style={{ border: "1px solid rgba(201,145,138,0.15)" }}>
-                    {dashData.recentLogs.slice(0, 20).map((log, i) => (
-                      <div key={i} className="px-4 py-3 flex items-start gap-3" style={{ borderBottom: i < 19 ? "1px solid rgba(201,145,138,0.08)" : "none" }}>
-                        <div className="w-2 h-2 rounded-full mt-1.5 flex-shrink-0" style={{ backgroundColor: log.type === "lesson_complete" ? "#6B7F5C" : log.type === "quiz_submit" ? (log.quizPassed === "合格" ? "#A67C52" : "#C9918A") : "#5B6E82" }} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <span style={{ fontSize: 12, fontWeight: 600, color: "#2D2D2D" }}>{log.name}</span>
-                            <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, fontWeight: 600, backgroundColor: log.type === "lesson_complete" ? "rgba(107,127,92,0.1)" : log.type === "quiz_submit" ? "rgba(166,124,82,0.1)" : "rgba(91,110,130,0.1)", color: log.type === "lesson_complete" ? "#6B7F5C" : log.type === "quiz_submit" ? "#A67C52" : "#5B6E82" }}>
-                              {log.type === "lesson_complete" ? "レッスン完了" : log.type === "quiz_submit" ? "クイズ " + log.quizPassed : "記述提出"}
-                            </span>
-                          </div>
-                          <div style={{ fontSize: 11, color: "#8C7B72" }}>
-                            {log.moduleName}{log.lessonName ? " / " + log.lessonName : ""}
-                            {log.quizCorrect ? ` (${log.quizCorrect}/${log.quizTotal})` : ""}
-                          </div>
-                          {log.writtenAnswer && (
-                            <div className="mt-1 p-2 rounded-lg" style={{ fontSize: 11, color: "#5B0E2D", backgroundColor: "rgba(201,145,138,0.06)", lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 80, overflow: "hidden" }}>
-                              {log.writtenAnswer.substring(0, 200)}{log.writtenAnswer.length > 200 ? "..." : ""}
-                            </div>
-                          )}
-                          <div style={{ fontSize: 10, color: "#bbb", marginTop: 2 }}>{log.timestamp}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="bg-white rounded-2xl p-6 text-center" style={{ border: "1px solid rgba(201,145,138,0.15)", fontSize: 13, color: "#8C7B72" }}>まだログがありません</div>
-                )}
-              </div>
-            </FadeIn>
-          </div>
-        )}
-      </div>
-    </div>
-  );
 
 
 </html>
