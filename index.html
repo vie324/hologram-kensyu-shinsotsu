@@ -204,21 +204,54 @@ const WrittenExercise = ({ exercise, index, value, onChange, revealed, onReveal 
   </div>
 );
 
+// ── URL ROUTING ──
+// ?id=xxxx → 受講者モード、パラメータなし → 管理者ダッシュボード
+const getUrlParam = (key) => new URLSearchParams(window.location.search).get(key);
+
 // ── MAIN APP ──
 function App() {
+  const [traineeId, setTraineeId] = useState(() => getUrlParam("id") || "");
+  const [mode, setMode] = useState(() => getUrlParam("id") ? "trainee" : "admin"); // "admin" or "trainee"
   const [done, setDone] = useState({});
   const [qDone, setQDone] = useState({});
   const [qAns, setQAns] = useState({});
   const [qSub, setQSub] = useState({});
   const [wAns, setWAns] = useState({});
   const [hints, setHints] = useState({});
-  const [view, setView] = useState({ t: "home" });
+  const [view, setView] = useState(() => getUrlParam("id") ? { t: "home" } : { t: "dashboard" });
   const [tab, setTab] = useState("lessons");
-  const [traineeName, setTraineeName] = useState(() => localStorage.getItem("hologram_trainee_name") || "");
+  const [traineeName, setTraineeName] = useState("");
   const [nameModal, setNameModal] = useState(false);
   const [dashData, setDashData] = useState(null);
   const [dashLoading, setDashLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState("");
+  const [traineeList, setTraineeList] = useState([]);
+  const [registerName, setRegisterName] = useState("");
+  const [registering, setRegistering] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(() => !!getUrlParam("id"));
+  const [copyMsg, setCopyMsg] = useState("");
+
+  // ── 受講者モード: 初回ロードでGASから進捗復元 ──
+  useEffect(() => {
+    if (mode === "trainee" && traineeId && GAS_URL) {
+      setInitialLoading(true);
+      sendToGAS({ action: "get_trainee_progress", traineeId }).then(res => {
+        if (res && res.status === "ok" && res.state) {
+          if (res.state.done) setDone(res.state.done);
+          if (res.state.qDone) setQDone(res.state.qDone);
+          if (res.state.qAns) setQAns(res.state.qAns);
+          if (res.state.qSub) setQSub(res.state.qSub);
+          if (res.state.wAns) setWAns(res.state.wAns);
+          if (res.name) setTraineeName(res.name);
+        }
+        setInitialLoading(false);
+      }).catch(() => setInitialLoading(false));
+    }
+    if (mode === "admin" && GAS_URL) {
+      loadTraineeList();
+      loadDashboard();
+    }
+  }, []);
 
   const totalL = allLessons.length;
   const doneC = Object.keys(done).length;
@@ -234,12 +267,14 @@ function App() {
   const findM = (id) => { for (const d of TRAINING_DATA.days) { const m = d.modules.find(m => m.id === id); if (m) return { d, m }; } return null; };
 
   const submitQ = (mid, quiz) => {
-    setQSub(p => ({ ...p, [mid]: true }));
+    const newQSub = { ...qSub, [mid]: true };
+    setQSub(newQSub);
     const ok = quiz.filter((q, i) => qAns[`${mid}-${i}`] === q.ans).length;
     const passed = ok >= Math.ceil(quiz.length * 0.7);
-    if (passed) setQDone(p => ({ ...p, [mid]: true }));
+    const newQDone = passed ? { ...qDone, [mid]: true } : qDone;
+    if (passed) setQDone(newQDone);
     const fm = findM(mid);
-    syncProgress([{ type: "quiz_submit", dayId: fm?.d?.id, moduleId: mid, moduleName: fm?.m?.title, quizCorrect: ok, quizTotal: quiz.length, quizPassed: passed }]);
+    syncProgress([{ type: "quiz_submit", dayId: fm?.d?.id, moduleId: mid, moduleName: fm?.m?.title, quizCorrect: ok, quizTotal: quiz.length, quizPassed: passed }], { qSub: newQSub, qDone: newQDone });
   };
   const retryQ = (mid) => { const na = { ...qAns }; Object.keys(na).forEach(k => { if (k.startsWith(mid)) delete na[k]; }); setQAns(na); setQSub(p => { const n = { ...p }; delete n[mid]; return n; }); setQDone(p => { const n = { ...p }; delete n[mid]; return n; }); };
 
@@ -263,13 +298,21 @@ function App() {
     };
   };
 
-  const syncProgress = async (events = []) => {
-    if (!traineeName || !GAS_URL) return;
+  const syncProgress = async (events = [], updatedState = null) => {
+    if (!traineeId || !GAS_URL) return;
     setSyncStatus("syncing");
+    // updatedState allows passing the latest state when setDone etc. hasn't committed yet
+    const currentDone = updatedState?.done ?? done;
+    const currentQDone = updatedState?.qDone ?? qDone;
+    const currentQAns = updatedState?.qAns ?? qAns;
+    const currentQSub = updatedState?.qSub ?? qSub;
+    const currentWAns = updatedState?.wAns ?? wAns;
     const payload = {
       action: events.length > 0 ? "log_progress" : "sync_full",
+      traineeId,
       traineeName,
       progress: buildProgressData(),
+      detailedState: { done: currentDone, qDone: currentQDone, qAns: currentQAns, qSub: currentQSub, wAns: currentWAns },
       events,
     };
     const res = await sendToGAS(payload);
@@ -279,11 +322,7 @@ function App() {
 
   const saveName = (name) => {
     setTraineeName(name);
-    localStorage.setItem("hologram_trainee_name", name);
     setNameModal(false);
-    if (name && GAS_URL) {
-      sendToGAS({ action: "sync_full", traineeName: name, progress: buildProgressData() });
-    }
   };
 
   const loadDashboard = async () => {
@@ -293,13 +332,42 @@ function App() {
     setDashLoading(false);
   };
 
+  const loadTraineeList = async () => {
+    const res = await sendToGAS({ action: "list_trainees" });
+    if (res && res.trainees) setTraineeList(res.trainees);
+  };
+
+  const registerTrainee = async () => {
+    if (!registerName.trim() || !GAS_URL) return;
+    setRegistering(true);
+    const res = await sendToGAS({ action: "register_trainee", traineeName: registerName.trim() });
+    if (res && res.traineeId) {
+      setRegisterName("");
+      await loadTraineeList();
+      await loadDashboard();
+    }
+    setRegistering(false);
+  };
+
+  const getTraineeUrl = (id) => {
+    const base = window.location.href.split("?")[0];
+    return base + "?id=" + id;
+  };
+
+  const copyUrl = (id) => {
+    navigator.clipboard.writeText(getTraineeUrl(id)).then(() => {
+      setCopyMsg(id);
+      setTimeout(() => setCopyMsg(""), 2000);
+    });
+  };
+
   // ── 管理者ダッシュボード ──
   const renderDashboard = () => (
     <div style={{ minHeight: "100vh", backgroundColor: "#FAF6F1" }}>
       <div className="px-4 py-3 flex items-center gap-3" style={{ borderBottom: "1px solid rgba(201,145,138,0.15)", backgroundColor: "#fff" }}>
-        <button onClick={() => nav({ t: "home" })} className="w-8 h-8 flex items-center justify-center rounded-full" style={{ color: "#5B0E2D" }}>{Icons.chevLeft}</button>
+        {mode === "trainee" && <button onClick={() => nav({ t: "home" })} className="w-8 h-8 flex items-center justify-center rounded-full" style={{ color: "#5B0E2D" }}>{Icons.chevLeft}</button>}
         <div style={{ fontSize: 16, fontWeight: 600, color: "#5B0E2D" }}>管理者ダッシュボード</div>
-        <button onClick={loadDashboard} className="ml-auto px-3 py-1.5 rounded-lg" style={{ fontSize: 11, color: "#5B6E82", backgroundColor: "rgba(91,110,130,0.08)" }}>更新</button>
+        <button onClick={() => { loadDashboard(); loadTraineeList(); }} className="ml-auto px-3 py-1.5 rounded-lg" style={{ fontSize: 11, color: "#5B6E82", backgroundColor: "rgba(91,110,130,0.08)" }}>更新</button>
       </div>
       <div className="p-4 max-w-2xl mx-auto">
         {!GAS_URL ? (
@@ -307,21 +375,67 @@ function App() {
             <div style={{ fontSize: 14, fontWeight: 600, color: "#5B0E2D", marginBottom: 8 }}>GAS連携が未設定です</div>
             <div style={{ fontSize: 12, color: "#8C7B72", lineHeight: 1.8 }}>index.html の GAS_URL にデプロイ済みのGoogle Apps Script WebアプリURLを設定してください。</div>
           </div>
-        ) : dashLoading ? (
-          <div className="text-center py-16"><div style={{ fontSize: 13, color: "#8C7B72" }}>読み込み中...</div></div>
-        ) : !dashData ? (
-          <div className="text-center py-16">
-            <button onClick={loadDashboard} className="px-6 py-3 rounded-xl text-white font-semibold" style={{ fontSize: 13, background: "linear-gradient(135deg, #5B6E82 0%, #7A8FA0 100%)" }}>データを読み込む</button>
-          </div>
         ) : (
           <div>
+            {/* 受講者登録セクション */}
             <FadeIn>
-              <div className="grid grid-cols-3 gap-3 mb-6">
-                {[
-                  { label: "受講者数", value: dashData.trainees?.length || 0, unit: "名" },
-                  { label: "全員完了", value: dashData.trainees?.filter(t => t.progressRate === "100%").length || 0, unit: "名" },
-                  { label: "直近ログ", value: dashData.recentLogs?.length || 0, unit: "件" },
-                ].map((s, i) => (
+              <div className="bg-white rounded-2xl p-5 mb-6" style={{ border: "1px solid rgba(201,145,138,0.2)" }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#5B0E2D", marginBottom: 12 }}>受講者を登録</div>
+                <div className="flex gap-2">
+                  <input
+                    type="text" value={registerName} onChange={e => setRegisterName(e.target.value)}
+                    placeholder="受講者名を入力（例: 田中 花子）"
+                    className="flex-1 px-4 py-2.5 rounded-xl text-sm" style={{ border: "1px solid rgba(201,145,138,0.3)", fontSize: 13 }}
+                    onKeyDown={e => { if (e.key === "Enter") registerTrainee(); }}
+                  />
+                  <button onClick={registerTrainee} disabled={registering || !registerName.trim()} className="px-5 py-2.5 rounded-xl text-white font-semibold transition-all hover:opacity-90 disabled:opacity-40" style={{ fontSize: 13, background: "linear-gradient(135deg, #5B0E2D 0%, #8C3F5C 100%)", whiteSpace: "nowrap" }}>
+                    {registering ? "登録中..." : "登録"}
+                  </button>
+                </div>
+              </div>
+            </FadeIn>
+
+            {/* 登録済み受講者リスト */}
+            {traineeList.length > 0 && (
+              <FadeIn delay={100}>
+                <div className="bg-white rounded-2xl p-5 mb-6" style={{ border: "1px solid rgba(201,145,138,0.2)" }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#5B0E2D", marginBottom: 12 }}>受講者URL一覧</div>
+                  <div style={{ fontSize: 11, color: "#8C7B72", marginBottom: 12 }}>URLを共有して、それぞれの受講者が自分専用のページで研修を進められます</div>
+                  {traineeList.map(t => {
+                    const pct = parseInt(t.progressRate) || 0;
+                    return (
+                      <div key={t.id} className="flex items-center gap-3 py-3" style={{ borderBottom: "1px solid rgba(201,145,138,0.08)" }}>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span style={{ fontSize: 13, fontWeight: 600, color: "#2D2D2D" }}>{t.name}</span>
+                            <span className="px-2 py-0.5 rounded-full" style={{ fontSize: 10, fontWeight: 600, backgroundColor: pct === 100 ? "rgba(4,120,87,0.08)" : pct > 0 ? "rgba(166,124,82,0.1)" : "rgba(140,123,114,0.1)", color: pct === 100 ? "#047857" : pct > 0 ? "#A67C52" : "#8C7B72" }}>{t.progressRate}</span>
+                          </div>
+                          <div className="flex items-center gap-1" style={{ fontSize: 11, color: "#8C7B72" }}>
+                            <span style={{ fontFamily: "monospace", fontSize: 10, wordBreak: "break-all" }}>{getTraineeUrl(t.id)}</span>
+                          </div>
+                        </div>
+                        <button onClick={() => copyUrl(t.id)} className="px-3 py-1.5 rounded-lg flex-shrink-0 transition-all hover:opacity-80" style={{ fontSize: 11, fontWeight: 600, color: copyMsg === t.id ? "#047857" : "#5B6E82", backgroundColor: copyMsg === t.id ? "rgba(4,120,87,0.08)" : "rgba(91,110,130,0.08)" }}>
+                          {copyMsg === t.id ? "コピー済み!" : "URLコピー"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </FadeIn>
+            )}
+
+            {/* 統計 */}
+            {dashLoading ? (
+              <div className="text-center py-8"><div style={{ fontSize: 13, color: "#8C7B72" }}>読み込み中...</div></div>
+            ) : dashData ? (
+              <div>
+                <FadeIn delay={150}>
+                  <div className="grid grid-cols-3 gap-3 mb-6">
+                    {[
+                      { label: "受講者数", value: dashData.trainees?.length || 0, unit: "名" },
+                      { label: "全員完了", value: dashData.trainees?.filter(t => t.progressRate === "100%").length || 0, unit: "名" },
+                      { label: "直近ログ", value: dashData.recentLogs?.length || 0, unit: "件" },
+                    ].map((s, i) => (
                   <div key={i} className="bg-white rounded-2xl p-4 text-center" style={{ border: "1px solid rgba(201,145,138,0.15)" }}>
                     <div style={{ fontSize: 10, color: "#8C7B72", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>{s.label}</div>
                     <div style={{ fontSize: 28, fontWeight: 300, color: "#5B0E2D", fontFamily: "'Cormorant Garamond', serif" }}>{s.value}<span style={{ fontSize: 12, color: "#8C7B72" }}>{s.unit}</span></div>
@@ -395,6 +509,8 @@ function App() {
                 )}
               </div>
             </FadeIn>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -405,41 +521,15 @@ function App() {
   // ── HOME ──
   const renderHome = () => (
     <div>
-      {/* 名前入力バー + 同期ステータス */}
+      {/* 受講者情報バー + 同期ステータス */}
       <div className="flex items-center justify-between px-4 py-2" style={{ backgroundColor: "#FAF6F1", borderBottom: "1px solid rgba(201,145,138,0.15)" }}>
         <div className="flex items-center gap-2">
-          {traineeName ? (
-            <button onClick={() => setNameModal(true)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all hover:opacity-80" style={{ fontSize: 12, color: "#5B0E2D", backgroundColor: "rgba(201,145,138,0.12)" }}>
-              <span style={{ fontWeight: 600 }}>{traineeName}</span>
-              <span style={{ fontSize: 10, color: "#8C7B72" }}>変更</span>
-            </button>
-          ) : (
-            <button onClick={() => setNameModal(true)} className="px-3 py-1.5 rounded-lg transition-all hover:opacity-80" style={{ fontSize: 12, color: "#C9918A", backgroundColor: "rgba(201,145,138,0.1)", border: "1px dashed rgba(201,145,138,0.4)" }}>
-              名前を入力して進捗を記録
-            </button>
-          )}
+          {traineeName && <span className="px-3 py-1.5 rounded-lg" style={{ fontSize: 12, fontWeight: 600, color: "#5B0E2D", backgroundColor: "rgba(201,145,138,0.12)" }}>{traineeName}</span>}
           {syncStatus === "syncing" && <span style={{ fontSize: 10, color: "#C9918A" }}>同期中...</span>}
           {syncStatus === "ok" && <span style={{ fontSize: 10, color: "#6B7F5C" }}>同期完了</span>}
           {syncStatus === "error" && <span style={{ fontSize: 10, color: "#C9918A" }}>同期エラー</span>}
         </div>
-        <button onClick={() => { nav({ t: "dashboard" }); loadDashboard(); }} className="px-3 py-1.5 rounded-lg transition-all hover:opacity-80" style={{ fontSize: 11, fontWeight: 600, color: "#5B6E82", backgroundColor: "rgba(91,110,130,0.08)" }}>
-          管理者ダッシュボード
-        </button>
       </div>
-      {/* 名前入力モーダル */}
-      {nameModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setNameModal(false)}>
-          <div className="bg-white rounded-2xl p-6 mx-4" style={{ maxWidth: 400, width: "100%" }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: "#5B0E2D", marginBottom: 4 }}>受講者名を入力</div>
-            <div style={{ fontSize: 12, color: "#8C7B72", marginBottom: 16 }}>進捗を記録・管理するためにお名前を入力してください</div>
-            <input id="nameInput" type="text" defaultValue={traineeName} placeholder="例: 田中 花子" className="w-full p-3 rounded-xl text-sm mb-4" style={{ border: "1px solid rgba(201,145,138,0.3)", fontSize: 14 }} onKeyDown={e => { if (e.key === "Enter") saveName(e.target.value.trim()); }} />
-            <div className="flex gap-2">
-              <button onClick={() => setNameModal(false)} className="flex-1 py-2.5 rounded-xl" style={{ fontSize: 13, color: "#8C7B72", border: "1px solid rgba(201,145,138,0.3)" }}>キャンセル</button>
-              <button onClick={() => saveName(document.getElementById("nameInput").value.trim())} className="flex-1 py-2.5 rounded-xl text-white font-semibold" style={{ fontSize: 13, background: "linear-gradient(135deg, #5B0E2D 0%, #8C3F5C 100%)" }}>保存</button>
-            </div>
-          </div>
-        </div>
-      )}
       {/* Hero */}
       <div className="relative overflow-hidden" style={{ background: "linear-gradient(170deg, #FAF6F1 0%, #F3EDE7 40%, #EDE4DC 100%)" }}>
         <div className="absolute inset-0" style={{ backgroundImage: "radial-gradient(circle at 80% 20%, rgba(201,145,138,0.12) 0%, transparent 50%), radial-gradient(circle at 20% 80%, rgba(91,14,45,0.06) 0%, transparent 50%)" }} />
@@ -589,7 +679,7 @@ function App() {
               </FadeIn>
             ))}
             {(!mod.writtenExercises || !mod.writtenExercises.length) && <div className="text-center py-8" style={{ fontSize: 13, color: "#bbb" }}>No exercises for this module</div>}
-            {mod.writtenExercises && mod.writtenExercises.length > 0 && GAS_URL && traineeName && (
+            {mod.writtenExercises && mod.writtenExercises.length > 0 && GAS_URL && traineeId && (
               <div className="mt-4 text-center">
                 <button onClick={() => {
                   const events = mod.writtenExercises.map((ex, ei) => ({
@@ -635,7 +725,7 @@ function App() {
         </FadeIn>
         <FadeIn delay={200}>
           <div className="flex items-center justify-between">
-            {!done[lid] ? <button onClick={() => { setDone(p => ({ ...p, [lid]: true })); const fl = findL(lid); syncProgress([{ type: 'lesson_complete', dayId: fl?.d?.id, moduleId: fl?.m?.id, moduleName: fl?.m?.title, lessonId: lid, lessonName: fl?.l?.title }]); }} className="px-6 py-3 rounded-xl font-semibold text-white transition-all hover:opacity-90" style={{ fontSize: 13, letterSpacing: "0.04em", background: "linear-gradient(135deg, #5B0E2D 0%, #8C3F5C 100%)" }}>
+            {!done[lid] ? <button onClick={() => { const nd = { ...done, [lid]: true }; setDone(nd); const fl = findL(lid); syncProgress([{ type: 'lesson_complete', dayId: fl?.d?.id, moduleId: fl?.m?.id, moduleName: fl?.m?.title, lessonId: lid, lessonName: fl?.l?.title }], { done: nd }); }} className="px-6 py-3 rounded-xl font-semibold text-white transition-all hover:opacity-90" style={{ fontSize: 13, letterSpacing: "0.04em", background: "linear-gradient(135deg, #5B0E2D 0%, #8C3F5C 100%)" }}>
               <span className="flex items-center gap-2"><span className="w-4 h-4">{Icons.check}</span>Mark Complete</span>
             </button> : <div className="flex items-center gap-2" style={{ fontSize: 13, fontWeight: 600, color: "#047857" }}><div className="w-4 h-4">{Icons.check}</div>Completed</div>}
             {isLast ? <button onClick={() => nav({ t: "mod", id: mod.id })} className="px-6 py-3 rounded-xl transition-all hover:opacity-80" style={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.04em", border: "1.5px solid #5B0E2D", color: "#5B0E2D" }}>
@@ -649,6 +739,18 @@ function App() {
     );
   };
 
+  // ── 初回ロード中 ──
+  if (initialLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: "#FAF6F1", fontFamily: "'DM Sans', 'Noto Sans JP', sans-serif" }}>
+        <div className="text-center">
+          <div style={{ fontSize: 24, fontWeight: 300, color: "#5B0E2D", fontFamily: "'Cormorant Garamond', serif", marginBottom: 12 }}>HOLOGRAM</div>
+          <div style={{ fontSize: 12, color: "#8C7B72" }}>進捗データを読み込み中...</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen" style={{ backgroundColor: "#FAF6F1", fontFamily: "'DM Sans', 'Noto Sans JP', sans-serif", color: "#1A1A1A" }}>
       <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
@@ -659,14 +761,16 @@ function App() {
       {/* Navigation */}
       <nav className="sticky top-0 z-40 backdrop-blur-xl" style={{ backgroundColor: "rgba(250,246,241,0.88)", borderBottom: "1px solid rgba(201,145,138,0.1)" }}>
         <div className="max-w-3xl mx-auto px-4 py-3.5 flex items-center justify-between">
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => nav({ t: "home" })}>
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => nav(mode === "admin" ? { t: "dashboard" } : { t: "home" })}>
             <span style={{ fontSize: 18, fontWeight: 600, color: "#5B0E2D", fontFamily: "'Cormorant Garamond', serif", letterSpacing: "0.08em" }}>HOLOGRAM</span>
             <span className="px-1.5 py-0.5 rounded" style={{ fontSize: 8, fontWeight: 700, letterSpacing: "0.15em", backgroundColor: "rgba(201,145,138,0.12)", color: "#C9918A" }}>TRAINING</span>
           </div>
-          <div className="flex items-center gap-3">
-            <span style={{ fontSize: 11, fontWeight: 600, color: "#5B0E2D" }}>{doneC}/{totalL}</span>
-            <div style={{ width: 64 }}><ProgressBar current={doneC} total={totalL} /></div>
-          </div>
+          {mode === "trainee" && (
+            <div className="flex items-center gap-3">
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#5B0E2D" }}>{doneC}/{totalL}</span>
+              <div style={{ width: 64 }}><ProgressBar current={doneC} total={totalL} /></div>
+            </div>
+          )}
         </div>
       </nav>
 

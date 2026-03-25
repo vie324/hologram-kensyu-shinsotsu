@@ -12,6 +12,7 @@
  * 6. スプレッドシートIDを下の SPREADSHEET_ID に設定（URLの /d/XXXXX/edit の XXXXX 部分）
  *
  * 【シート構成】（初回実行時に自動作成されます）
+ * - 「受講者マスタ」: 受講者のID・名前・作成日時
  * - 「進捗ログ」: 全イベントの生データ
  * - 「受講者一覧」: 受講者ごとの最新サマリー
  * - 「管理ダッシュボード」: 管理者向けの集計ビュー
@@ -27,28 +28,52 @@ function getSpreadsheet() {
   return SpreadsheetApp.getActiveSpreadsheet();
 }
 
+// ── ユニークID生成 ──
+function generateId() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let id = '';
+  for (let i = 0; i < 8; i++) {
+    id += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return id;
+}
+
 // ── シート初期化 ──
 function initializeSheets() {
   const ss = getSpreadsheet();
+
+  // 受講者マスタシート
+  let masterSheet = ss.getSheetByName('受講者マスタ');
+  if (!masterSheet) {
+    masterSheet = ss.insertSheet('受講者マスタ');
+    masterSheet.appendRow(['受講者ID', '受講者名', '作成日時', '詳細進捗JSON']);
+    masterSheet.getRange(1, 1, 1, 4).setFontWeight('bold').setBackground('#5B0E2D').setFontColor('#FFFFFF');
+    masterSheet.setFrozenRows(1);
+    masterSheet.setColumnWidth(1, 120);
+    masterSheet.setColumnWidth(2, 150);
+    masterSheet.setColumnWidth(3, 180);
+    masterSheet.setColumnWidth(4, 400);
+  }
 
   // 進捗ログシート
   let logSheet = ss.getSheetByName('進捗ログ');
   if (!logSheet) {
     logSheet = ss.insertSheet('進捗ログ');
     logSheet.appendRow([
-      'タイムスタンプ', '受講者名', 'イベント種別',
+      'タイムスタンプ', '受講者ID', '受講者名', 'イベント種別',
       'ステップ', 'モジュールID', 'モジュール名',
       'レッスンID', 'レッスン名',
       'クイズ正答数', 'クイズ問題数', 'クイズ合格',
       '記述回答内容', '記述問題文'
     ]);
-    logSheet.getRange(1, 1, 1, 13).setFontWeight('bold').setBackground('#5B0E2D').setFontColor('#FFFFFF');
+    logSheet.getRange(1, 1, 1, 14).setFontWeight('bold').setBackground('#5B0E2D').setFontColor('#FFFFFF');
     logSheet.setFrozenRows(1);
     logSheet.setColumnWidth(1, 160);
-    logSheet.setColumnWidth(2, 120);
-    logSheet.setColumnWidth(3, 100);
-    logSheet.setColumnWidth(12, 400);
-    logSheet.setColumnWidth(13, 300);
+    logSheet.setColumnWidth(2, 100);
+    logSheet.setColumnWidth(3, 120);
+    logSheet.setColumnWidth(4, 100);
+    logSheet.setColumnWidth(13, 400);
+    logSheet.setColumnWidth(14, 300);
   }
 
   // 受講者一覧シート
@@ -56,11 +81,11 @@ function initializeSheets() {
   if (!summarySheet) {
     summarySheet = ss.insertSheet('受講者一覧');
     summarySheet.appendRow([
-      '受講者名', '最終アクセス', '完了レッスン数', '全レッスン数',
+      '受講者ID', '受講者名', '最終アクセス', '完了レッスン数', '全レッスン数',
       '進捗率', 'クイズ合格数', '全クイズ数', 'クイズ合格率',
       '記述回答数', 'STEP1進捗', 'STEP2進捗', 'STEP3進捗'
     ]);
-    summarySheet.getRange(1, 1, 1, 12).setFontWeight('bold').setBackground('#5B0E2D').setFontColor('#FFFFFF');
+    summarySheet.getRange(1, 1, 1, 13).setFontWeight('bold').setBackground('#5B0E2D').setFontColor('#FFFFFF');
     summarySheet.setFrozenRows(1);
   }
 
@@ -95,6 +120,9 @@ function doPost(e) {
 
     let result;
     switch (action) {
+      case 'register_trainee':
+        result = registerTrainee(data);
+        break;
       case 'log_progress':
         result = logProgress(data);
         break;
@@ -103,6 +131,12 @@ function doPost(e) {
         break;
       case 'get_dashboard':
         result = getDashboardData(data);
+        break;
+      case 'get_trainee_progress':
+        result = getTraineeProgress(data);
+        break;
+      case 'list_trainees':
+        result = listTrainees(data);
         break;
       default:
         result = { error: 'Unknown action: ' + action };
@@ -118,10 +152,16 @@ function doPost(e) {
 
 function doGet(e) {
   const action = (e && e.parameter && e.parameter.action) || 'get_dashboard';
-  const password = (e && e.parameter && e.parameter.password) || '';
+  const traineeId = (e && e.parameter && e.parameter.id) || '';
 
   if (action === 'get_dashboard') {
-    const result = getDashboardData({ password: password });
+    const result = getDashboardData({});
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'get_trainee_progress' && traineeId) {
+    const result = getTraineeProgress({ traineeId: traineeId });
     return ContentService.createTextOutput(JSON.stringify(result))
       .setMimeType(ContentService.MimeType.JSON);
   }
@@ -130,17 +170,112 @@ function doGet(e) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+// ── 受講者登録 ──
+function registerTrainee(data) {
+  const ss = initializeSheets();
+  const masterSheet = ss.getSheetByName('受講者マスタ');
+  const name = data.traineeName || '未入力';
+
+  // 既存チェック（同名がいないか）
+  const lastRow = masterSheet.getLastRow();
+  if (lastRow > 1) {
+    const names = masterSheet.getRange(2, 2, lastRow - 1, 1).getValues();
+    for (let i = 0; i < names.length; i++) {
+      if (names[i][0] === name) {
+        const existingId = masterSheet.getRange(i + 2, 1).getValue();
+        return { status: 'ok', traineeId: existingId, name: name, message: '既に登録済みです' };
+      }
+    }
+  }
+
+  // 新規登録
+  const id = generateId();
+  masterSheet.appendRow([id, name, new Date().toLocaleString('ja-JP'), '{}']);
+
+  return { status: 'ok', traineeId: id, name: name, message: '登録完了' };
+}
+
+// ── 受講者一覧取得 ──
+function listTrainees(data) {
+  const ss = initializeSheets();
+  const masterSheet = ss.getSheetByName('受講者マスタ');
+  const summarySheet = ss.getSheetByName('受講者一覧');
+
+  const trainees = [];
+  const lastRow = masterSheet.getLastRow();
+  if (lastRow <= 1) return { trainees: [] };
+
+  const masterData = masterSheet.getRange(2, 1, lastRow - 1, 3).getValues();
+
+  // サマリーデータも取得
+  const summaryMap = {};
+  const sLastRow = summarySheet.getLastRow();
+  if (sLastRow > 1) {
+    const sData = summarySheet.getRange(2, 1, sLastRow - 1, 13).getValues();
+    sData.forEach(r => { summaryMap[r[0]] = r; });
+  }
+
+  masterData.forEach(row => {
+    const id = row[0];
+    const summary = summaryMap[id];
+    trainees.push({
+      id: id,
+      name: row[1],
+      createdAt: row[2],
+      progressRate: summary ? summary[5] : '0%',
+      completedLessons: summary ? summary[3] : 0,
+      totalLessons: summary ? summary[4] : 0,
+      lastAccess: summary ? summary[2] : '-',
+    });
+  });
+
+  return { trainees: trainees };
+}
+
+// ── 受講者の詳細進捗取得（ページ復元用） ──
+function getTraineeProgress(data) {
+  const ss = initializeSheets();
+  const masterSheet = ss.getSheetByName('受講者マスタ');
+  const traineeId = data.traineeId;
+
+  if (!traineeId) return { error: 'traineeId is required' };
+
+  const lastRow = masterSheet.getLastRow();
+  if (lastRow <= 1) return { error: 'trainee not found' };
+
+  const ids = masterSheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (ids[i][0] === traineeId) {
+      const rowIdx = i + 2;
+      const name = masterSheet.getRange(rowIdx, 2).getValue();
+      const jsonStr = masterSheet.getRange(rowIdx, 4).getValue() || '{}';
+      let state = {};
+      try { state = JSON.parse(jsonStr); } catch (e) { state = {}; }
+      return {
+        status: 'ok',
+        traineeId: traineeId,
+        name: name,
+        state: state, // { done, qDone, qAns, qSub, wAns }
+      };
+    }
+  }
+
+  return { error: 'trainee not found' };
+}
+
 // ── 進捗ログの記録 ──
 function logProgress(data) {
   const ss = initializeSheets();
   const logSheet = ss.getSheetByName('進捗ログ');
   const timestamp = new Date().toLocaleString('ja-JP');
+  const traineeId = data.traineeId || '';
   const name = data.traineeName || '未入力';
 
   const events = data.events || [];
   events.forEach(ev => {
     logSheet.appendRow([
       timestamp,
+      traineeId,
       name,
       ev.type || '',        // lesson_complete, quiz_submit, written_submit
       ev.dayId || '',
@@ -157,7 +292,9 @@ function logProgress(data) {
   });
 
   // 受講者サマリー更新
-  updateSummary(ss, name, data);
+  updateSummary(ss, traineeId, name, data);
+  // 詳細進捗を保存
+  saveDetailedState(ss, traineeId, data);
 
   return { status: 'ok', logged: events.length };
 }
@@ -165,27 +302,50 @@ function logProgress(data) {
 // ── 全進捗の一括同期 ──
 function syncFullProgress(data) {
   const ss = initializeSheets();
+  const traineeId = data.traineeId || '';
   const name = data.traineeName || '未入力';
 
   // サマリー更新
-  updateSummary(ss, name, data);
+  updateSummary(ss, traineeId, name, data);
+  // 詳細進捗を保存
+  saveDetailedState(ss, traineeId, data);
 
   return { status: 'ok', synced: true };
 }
 
+// ── 詳細進捗の保存（受講者マスタのJSON列） ──
+function saveDetailedState(ss, traineeId, data) {
+  if (!traineeId || !data.detailedState) return;
+
+  const masterSheet = ss.getSheetByName('受講者マスタ');
+  if (!masterSheet) return;
+
+  const lastRow = masterSheet.getLastRow();
+  if (lastRow <= 1) return;
+
+  const ids = masterSheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (ids[i][0] === traineeId) {
+      const jsonStr = JSON.stringify(data.detailedState);
+      masterSheet.getRange(i + 2, 4).setValue(jsonStr);
+      return;
+    }
+  }
+}
+
 // ── 受講者サマリーの更新 ──
-function updateSummary(ss, name, data) {
+function updateSummary(ss, traineeId, name, data) {
   const sheet = ss.getSheetByName('受講者一覧');
   if (!sheet) return;
 
   const lastRow = sheet.getLastRow();
   let rowIndex = -1;
 
-  // 既存行を検索
+  // 既存行を検索（IDで）
   if (lastRow > 1) {
-    const names = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-    for (let i = 0; i < names.length; i++) {
-      if (names[i][0] === name) {
+    const ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (let i = 0; i < ids.length; i++) {
+      if (ids[i][0] === traineeId) {
         rowIndex = i + 2;
         break;
       }
@@ -194,6 +354,7 @@ function updateSummary(ss, name, data) {
 
   const progress = data.progress || {};
   const row = [
+    traineeId,
     name,
     new Date().toLocaleString('ja-JP'),
     progress.completedLessons || 0,
@@ -209,7 +370,7 @@ function updateSummary(ss, name, data) {
   ];
 
   if (rowIndex > 0) {
-    sheet.getRange(rowIndex, 1, 1, 12).setValues([row]);
+    sheet.getRange(rowIndex, 1, 1, 13).setValues([row]);
   } else {
     sheet.appendRow(row);
   }
@@ -236,7 +397,7 @@ function updateDashboard(ss) {
   const summaryLastRow = summarySheet.getLastRow();
   if (summaryLastRow <= 1) return;
 
-  const summaryData = summarySheet.getRange(2, 1, summaryLastRow - 1, 12).getValues();
+  const summaryData = summarySheet.getRange(2, 1, summaryLastRow - 1, 13).getValues();
 
   // 全体統計
   dashSheet.getRange('A4').setValue('全体統計').setFontWeight('bold').setFontSize(12).setFontColor('#5B0E2D');
@@ -244,7 +405,7 @@ function updateDashboard(ss) {
   dashSheet.getRange('B5').setValue(summaryData.length + '名');
   dashSheet.getRange('A6').setValue('全員完了');
 
-  const allComplete = summaryData.filter(r => r[4] === '100%').length;
+  const allComplete = summaryData.filter(r => r[5] === '100%').length;
   dashSheet.getRange('B6').setValue(allComplete + '名 / ' + summaryData.length + '名');
 
   // 受講者別進捗
@@ -254,11 +415,11 @@ function updateDashboard(ss) {
 
   summaryData.forEach((row, i) => {
     dashSheet.getRange(10 + i, 1, 1, 6).setValues([[
-      row[0], row[4], row[9], row[10], row[11], row[1]
+      row[1], row[5], row[10], row[11], row[12], row[2]
     ]]);
 
     // 進捗率に応じて色分け
-    const pct = parseInt(row[4]) || 0;
+    const pct = parseInt(row[5]) || 0;
     const color = pct === 100 ? '#E8F5E9' : pct >= 50 ? '#FFF8E1' : '#FFF3F0';
     dashSheet.getRange(10 + i, 2).setBackground(color);
   });
@@ -269,25 +430,34 @@ function getDashboardData(data) {
   const ss = initializeSheets();
   const summarySheet = ss.getSheetByName('受講者一覧');
   const logSheet = ss.getSheetByName('進捗ログ');
+  const masterSheet = ss.getSheetByName('受講者マスタ');
 
   const result = { trainees: [], recentLogs: [] };
 
+  // 受講者マスタからID・名前を取得
+  const idMap = {};
+  if (masterSheet && masterSheet.getLastRow() > 1) {
+    const masterData = masterSheet.getRange(2, 1, masterSheet.getLastRow() - 1, 3).getValues();
+    masterData.forEach(r => { idMap[r[0]] = { name: r[1], createdAt: r[2] }; });
+  }
+
   // 受講者一覧
   if (summarySheet && summarySheet.getLastRow() > 1) {
-    const rows = summarySheet.getRange(2, 1, summarySheet.getLastRow() - 1, 12).getValues();
+    const rows = summarySheet.getRange(2, 1, summarySheet.getLastRow() - 1, 13).getValues();
     result.trainees = rows.map(r => ({
-      name: r[0],
-      lastAccess: r[1],
-      completedLessons: r[2],
-      totalLessons: r[3],
-      progressRate: r[4],
-      completedQuizzes: r[5],
-      totalQuizzes: r[6],
-      quizRate: r[7],
-      writtenCount: r[8],
-      day1: r[9],
-      day2: r[10],
-      day3: r[11]
+      id: r[0],
+      name: r[1],
+      lastAccess: r[2],
+      completedLessons: r[3],
+      totalLessons: r[4],
+      progressRate: r[5],
+      completedQuizzes: r[6],
+      totalQuizzes: r[7],
+      quizRate: r[8],
+      writtenCount: r[9],
+      day1: r[10],
+      day2: r[11],
+      day3: r[12]
     }));
   }
 
@@ -295,21 +465,22 @@ function getDashboardData(data) {
   if (logSheet && logSheet.getLastRow() > 1) {
     const lastRow = logSheet.getLastRow();
     const startRow = Math.max(2, lastRow - 49);
-    const rows = logSheet.getRange(startRow, 1, lastRow - startRow + 1, 13).getValues();
+    const rows = logSheet.getRange(startRow, 1, lastRow - startRow + 1, 14).getValues();
     result.recentLogs = rows.reverse().map(r => ({
       timestamp: r[0],
-      name: r[1],
-      type: r[2],
-      day: r[3],
-      moduleId: r[4],
-      moduleName: r[5],
-      lessonId: r[6],
-      lessonName: r[7],
-      quizCorrect: r[8],
-      quizTotal: r[9],
-      quizPassed: r[10],
-      writtenAnswer: r[11],
-      writtenQuestion: r[12]
+      traineeId: r[1],
+      name: r[2],
+      type: r[3],
+      day: r[4],
+      moduleId: r[5],
+      moduleName: r[6],
+      lessonId: r[7],
+      lessonName: r[8],
+      quizCorrect: r[9],
+      quizTotal: r[10],
+      quizPassed: r[11],
+      writtenAnswer: r[12],
+      writtenQuestion: r[13]
     }));
   }
 
