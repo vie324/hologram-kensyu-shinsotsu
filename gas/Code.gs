@@ -188,8 +188,8 @@ function registerTrainee(data) {
     }
   }
 
-  // 新規登録
-  const id = generateId();
+  // 新規登録（クライアントからIDが渡された場合はそれを使用）
+  const id = data.traineeId || generateId();
   masterSheet.appendRow([id, name, new Date().toLocaleString('ja-JP'), '{}']);
 
   return { status: 'ok', traineeId: id, name: name, message: '登録完了' };
