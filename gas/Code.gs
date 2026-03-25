@@ -37,7 +37,7 @@ function initializeSheets() {
     logSheet = ss.insertSheet('進捗ログ');
     logSheet.appendRow([
       'タイムスタンプ', '受講者名', 'イベント種別',
-      'DAY', 'モジュールID', 'モジュール名',
+      'ステップ', 'モジュールID', 'モジュール名',
       'レッスンID', 'レッスン名',
       'クイズ正答数', 'クイズ問題数', 'クイズ合格',
       '記述回答内容', '記述問題文'
@@ -58,7 +58,7 @@ function initializeSheets() {
     summarySheet.appendRow([
       '受講者名', '最終アクセス', '完了レッスン数', '全レッスン数',
       '進捗率', 'クイズ合格数', '全クイズ数', 'クイズ合格率',
-      '記述回答数', 'DAY1進捗', 'DAY2進捗', 'DAY3進捗'
+      '記述回答数', 'STEP1進捗', 'STEP2進捗', 'STEP3進捗'
     ]);
     summarySheet.getRange(1, 1, 1, 12).setFontWeight('bold').setBackground('#5B0E2D').setFontColor('#FFFFFF');
     summarySheet.setFrozenRows(1);
@@ -249,7 +249,7 @@ function updateDashboard(ss) {
 
   // 受講者別進捗
   dashSheet.getRange('A8').setValue('受講者別進捗').setFontWeight('bold').setFontSize(12).setFontColor('#5B0E2D');
-  dashSheet.getRange('A9:F9').setValues([['受講者名', '進捗率', 'DAY1', 'DAY2', 'DAY3', '最終アクセス']])
+  dashSheet.getRange('A9:F9').setValues([['受講者名', '進捗率', 'STEP1', 'STEP2', 'STEP3', '最終アクセス']])
     .setFontWeight('bold').setBackground('#F3EDE7');
 
   summaryData.forEach((row, i) => {
