@@ -109,11 +109,13 @@ const sendToGAS = async (payload) => {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
       body: JSON.stringify(payload),
+      redirect: "follow",
     });
-    return await res.json();
+    const text = await res.text();
+    try { return JSON.parse(text); } catch { console.warn("GAS応答パースエラー:", text); return { error: "GASからの応答を解析できません。GASを再デプロイしてください。" }; }
   } catch (e) {
     console.warn("GAS送信エラー:", e);
-    return null;
+    return { error: "GASへの接続に失敗しました: " + e.message };
   }
 };
 
@@ -122,8 +124,9 @@ const fetchFromGAS = async (params = {}) => {
   try {
     const url = new URL(GAS_URL);
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-    const res = await fetch(url.toString());
-    return await res.json();
+    const res = await fetch(url.toString(), { redirect: "follow" });
+    const text = await res.text();
+    try { return JSON.parse(text); } catch { console.warn("GAS応答パースエラー:", text); return null; }
   } catch (e) {
     console.warn("GAS取得エラー:", e);
     return null;
@@ -208,23 +211,6 @@ const WrittenExercise = ({ exercise, index, value, onChange, revealed, onReveal 
 // ?id=xxxx → 受講者モード、パラメータなし → 管理者ダッシュボード
 const getUrlParam = (key) => new URLSearchParams(window.location.search).get(key);
 
-// ── クライアント側ID生成 ──
-const generateId = () => {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let id = '';
-  for (let i = 0; i < 8; i++) id += chars[Math.floor(Math.random() * chars.length)];
-  return id;
-};
-
-// ── localStorage受講者リスト管理 ──
-const STORAGE_KEY = "hologram_trainees";
-const loadLocalTrainees = () => {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; }
-};
-const saveLocalTrainees = (list) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-};
-
 // ── MAIN APP ──
 function App() {
   const [traineeId, setTraineeId] = useState(() => getUrlParam("id") || "");
@@ -242,7 +228,8 @@ function App() {
   const [dashData, setDashData] = useState(null);
   const [dashLoading, setDashLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState("");
-  const [traineeList, setTraineeList] = useState(() => loadLocalTrainees());
+  const [traineeList, setTraineeList] = useState([]);
+  const [registerError, setRegisterError] = useState("");
   const [registerName, setRegisterName] = useState("");
   const [registering, setRegistering] = useState(false);
   const [initialLoading, setInitialLoading] = useState(() => !!getUrlParam("id"));
@@ -250,32 +237,23 @@ function App() {
 
   // ── 受講者モード: 初回ロードでGASから進捗復元 ──
   useEffect(() => {
-    if (mode === "trainee" && traineeId) {
-      // localStorageから受講者名を即座に取得
-      const local = loadLocalTrainees();
-      const localTrainee = local.find(t => t.id === traineeId);
-      if (localTrainee) setTraineeName(localTrainee.name);
-
-      if (GAS_URL) {
-        setInitialLoading(true);
-        sendToGAS({ action: "get_trainee_progress", traineeId }).then(res => {
-          if (res && res.status === "ok" && res.state) {
-            if (res.state.done) setDone(res.state.done);
-            if (res.state.qDone) setQDone(res.state.qDone);
-            if (res.state.qAns) setQAns(res.state.qAns);
-            if (res.state.qSub) setQSub(res.state.qSub);
-            if (res.state.wAns) setWAns(res.state.wAns);
-            if (res.name) setTraineeName(res.name);
-          }
-          setInitialLoading(false);
-        }).catch(() => setInitialLoading(false));
-      } else {
+    if (mode === "trainee" && traineeId && GAS_URL) {
+      setInitialLoading(true);
+      sendToGAS({ action: "get_trainee_progress", traineeId }).then(res => {
+        if (res && res.status === "ok" && res.state) {
+          if (res.state.done) setDone(res.state.done);
+          if (res.state.qDone) setQDone(res.state.qDone);
+          if (res.state.qAns) setQAns(res.state.qAns);
+          if (res.state.qSub) setQSub(res.state.qSub);
+          if (res.state.wAns) setWAns(res.state.wAns);
+          if (res.name) setTraineeName(res.name);
+        }
         setInitialLoading(false);
-      }
+      }).catch(() => setInitialLoading(false));
     }
-    if (mode === "admin") {
+    if (mode === "admin" && GAS_URL) {
       loadTraineeList();
-      if (GAS_URL) loadDashboard();
+      loadDashboard();
     }
   }, []);
 
@@ -359,49 +337,29 @@ function App() {
   };
 
   const loadTraineeList = async () => {
-    // まずlocalStorageから読み込み（常に即座に反映）
-    const local = loadLocalTrainees();
-    if (local.length > 0) setTraineeList(local);
-    // GASからも取得を試みる（バックグラウンド同期）
-    if (GAS_URL) {
-      const res = await sendToGAS({ action: "list_trainees" });
-      if (res && res.trainees && res.trainees.length > 0) {
-        // GASのデータとローカルをマージ（GAS優先）
-        const merged = [...res.trainees];
-        const gasIds = new Set(res.trainees.map(t => t.id));
-        local.forEach(t => { if (!gasIds.has(t.id)) merged.push(t); });
-        setTraineeList(merged);
-        saveLocalTrainees(merged);
-      }
+    if (!GAS_URL) return;
+    const res = await fetchFromGAS({ action: "list_trainees" });
+    if (res && res.trainees) {
+      setTraineeList(res.trainees);
     }
   };
 
   const registerTrainee = async () => {
     if (!registerName.trim()) return;
-    setRegistering(true);
-    const name = registerName.trim();
-
-    // 既存チェック（同名）
-    const existing = traineeList.find(t => t.name === name);
-    if (existing) {
-      setRegistering(false);
-      setCopyMsg(existing.id);
-      setTimeout(() => setCopyMsg(""), 2000);
-      setRegisterName("");
+    if (!GAS_URL) {
+      setRegisterError("GAS_URLが設定されていません。");
       return;
     }
-
-    // クライアント側でID生成（即座にURL発行）
-    const id = generateId();
-    const newTrainee = { id, name, createdAt: new Date().toLocaleString("ja-JP"), progressRate: "0%", completedLessons: 0, totalLessons: 0, lastAccess: "-" };
-    const updated = [...traineeList, newTrainee];
-    setTraineeList(updated);
-    saveLocalTrainees(updated);
-    setRegisterName("");
-
-    // GASにもバックグラウンドで登録
-    if (GAS_URL) {
-      sendToGAS({ action: "register_trainee", traineeName: name, traineeId: id });
+    setRegistering(true);
+    setRegisterError("");
+    const name = registerName.trim();
+    const res = await sendToGAS({ action: "register_trainee", traineeName: name });
+    if (res && res.traineeId) {
+      setRegisterName("");
+      await loadTraineeList();
+      await loadDashboard();
+    } else {
+      setRegisterError(res?.error || "登録に失敗しました。GASのデプロイを確認してください。");
     }
     setRegistering(false);
   };
@@ -466,6 +424,7 @@ function App() {
                     {registering ? "登録中..." : "登録"}
                   </button>
                 </div>
+                {registerError && <div className="mt-2 px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: "#FEF2F2", color: "#DC2626", border: "1px solid #FECACA", fontSize: 12 }}>{registerError}</div>}
               </div>
             </FadeIn>
 

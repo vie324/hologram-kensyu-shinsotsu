@@ -154,19 +154,22 @@ function doGet(e) {
   const action = (e && e.parameter && e.parameter.action) || 'get_dashboard';
   const traineeId = (e && e.parameter && e.parameter.id) || '';
 
-  if (action === 'get_dashboard') {
-    const result = getDashboardData({});
-    return ContentService.createTextOutput(JSON.stringify(result))
-      .setMimeType(ContentService.MimeType.JSON);
+  let result;
+  switch (action) {
+    case 'get_dashboard':
+      result = getDashboardData({});
+      break;
+    case 'get_trainee_progress':
+      result = traineeId ? getTraineeProgress({ traineeId: traineeId }) : { error: 'id is required' };
+      break;
+    case 'list_trainees':
+      result = listTrainees({});
+      break;
+    default:
+      result = { status: 'ok', message: 'HOLOGRAM Training API' };
   }
 
-  if (action === 'get_trainee_progress' && traineeId) {
-    const result = getTraineeProgress({ traineeId: traineeId });
-    return ContentService.createTextOutput(JSON.stringify(result))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-
-  return ContentService.createTextOutput(JSON.stringify({ status: 'ok', message: 'HOLOGRAM Training API' }))
+  return ContentService.createTextOutput(JSON.stringify(result))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
