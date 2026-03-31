@@ -172,8 +172,317 @@ const WrittenExercise = ({ exercise, index, value, onChange, revealed, onReveal 
   </div>
 );
 
+// ── STAFF STORAGE HELPERS ──
+const STORAGE_KEYS = {
+  staffList: "hologram_staff_list",
+  staffData: (id) => `hologram_staff_${id}`,
+  gasUrl: "hologram_gas_url",
+  adminPin: "hologram_admin_pin",
+};
+
+const loadStaffList = () => {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEYS.staffList)) || []; } catch { return []; }
+};
+const saveStaffList = (list) => localStorage.setItem(STORAGE_KEYS.staffList, JSON.stringify(list));
+const loadStaffData = (id) => {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEYS.staffData(id))) || { done: {}, qDone: {}, qAns: {}, qSub: {}, wAns: {}, hints: {} }; } catch { return { done: {}, qDone: {}, qAns: {}, qSub: {}, wAns: {}, hints: {} }; }
+};
+const saveStaffData = (id, data) => localStorage.setItem(STORAGE_KEYS.staffData(id), JSON.stringify(data));
+const removeStaffData = (id) => localStorage.removeItem(STORAGE_KEYS.staffData(id));
+
+const buildLogPayload = (staff, data) => {
+  const completedLessons = allLessons.filter(l => data.done[l]);
+  const passedQuizzes = allModuleIds.filter(m => data.qDone[m]);
+  const writtenAnswers = {};
+  Object.entries(data.wAns || {}).forEach(([k, v]) => { if (v) writtenAnswers[k] = v; });
+  return {
+    staffName: staff.name,
+    staffId: staff.id,
+    registeredAt: staff.registeredAt,
+    deletedAt: new Date().toISOString(),
+    lessonsCompleted: completedLessons.length,
+    totalLessons: allLessons.length,
+    quizzesPassed: passedQuizzes.length,
+    totalQuizzes: allModuleIds.length,
+    completedLessonIds: completedLessons,
+    passedQuizIds: passedQuizzes,
+    writtenAnswers,
+  };
+};
+
+const sendLogToGAS = async (payload, gasUrl) => {
+  if (!gasUrl) return { ok: false, error: "GAS URLが設定されていません" };
+  try {
+    const resp = await fetch(gasUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify(payload),
+    });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+};
+
+// ── ADMIN ICONS ──
+const AdminIcons = {
+  users: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+  plus: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>,
+  trash: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6M14 11v6"/></svg>,
+  settings: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+  back: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>,
+  lock: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+};
+
+// ── STAFF SELECT SCREEN ──
+function StaffSelectScreen({ staffList, totalL, totalQ, onSelect, onAdmin }) {
+  return (
+    <div className="min-h-screen flex flex-col" style={{ backgroundColor: "#FAF6F1", fontFamily: "'DM Sans', 'Noto Sans JP', sans-serif" }}>
+      <div className="flex-1 flex items-center justify-center px-4 py-12">
+        <div style={{ maxWidth: 440, width: "100%" }}>
+          <FadeIn>
+            <div className="text-center mb-10">
+              <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.3em", color: "#C9918A", marginBottom: 12, textTransform: "uppercase" }}>Hologram Staff Training</div>
+              <h1 style={{ fontSize: 34, fontWeight: 300, color: "#5B0E2D", fontFamily: "'Cormorant Garamond', serif", lineHeight: 1.2, marginBottom: 8 }}>マナー研修<br/><span style={{ fontWeight: 600 }}>プログラム</span></h1>
+              <p style={{ fontSize: 13, color: "#8C7B72", lineHeight: 1.7, marginTop: 12 }}>スタッフ名を選択して研修を開始してください</p>
+            </div>
+          </FadeIn>
+          <FadeIn delay={100}>
+            <div className="space-y-3 mb-8">
+              {staffList.length === 0 && <div className="text-center py-10" style={{ fontSize: 13, color: "#bbb" }}>スタッフが登録されていません<br/><span style={{ fontSize: 11 }}>管理者画面から登録してください</span></div>}
+              {staffList.map((s, i) => {
+                const sd = loadStaffData(s.id);
+                const lc = Object.keys(sd.done || {}).length;
+                const qc = Object.keys(sd.qDone || {}).length;
+                return (
+                  <FadeIn key={s.id} delay={150 + i * 60}>
+                    <div className="flex items-center gap-4 p-4 rounded-xl cursor-pointer transition-all" style={{ backgroundColor: "#fff", border: "1px solid rgba(201,145,138,0.15)" }} onClick={() => onSelect(s)} onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 16px rgba(91,14,45,0.08)"} onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}>
+                      <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{ backgroundColor: "rgba(201,145,138,0.1)", color: "#5B0E2D", fontSize: 14, fontWeight: 700 }}>{s.name.charAt(0)}</div>
+                      <div className="flex-1">
+                        <div style={{ fontSize: 15, fontWeight: 600, color: "#1A1A1A" }}>{s.name}</div>
+                        <div style={{ fontSize: 11, color: "#999" }}>Lessons {lc}/{totalL} · Tests {qc}/{totalQ}</div>
+                      </div>
+                      <div className="w-4 h-4" style={{ color: "#ccc" }}>{Icons.chevRight}</div>
+                    </div>
+                  </FadeIn>
+                );
+              })}
+            </div>
+          </FadeIn>
+          <FadeIn delay={300}>
+            <div className="text-center">
+              <button onClick={onAdmin} className="px-5 py-2.5 rounded-xl transition-all hover:opacity-80" style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.04em", border: "1.5px solid rgba(201,145,138,0.3)", color: "#5B0E2D" }}>
+                <span className="flex items-center gap-2"><span className="w-4 h-4">{AdminIcons.settings}</span>管理者画面</span>
+              </button>
+            </div>
+          </FadeIn>
+        </div>
+      </div>
+      <footer className="text-center py-8" style={{ fontSize: 11, color: "#bbb", letterSpacing: "0.08em" }}>
+        <p>HOLOGRAM / 株式会社Uluu</p>
+      </footer>
+    </div>
+  );
+}
+
+// ── ADMIN PANEL ──
+function AdminPanel({ staffList, setStaffList, totalL, totalQ, adminAuth, setAdminAuth, onBack }) {
+  const [newName, setNewName] = useState("");
+  const [gasUrl, setGasUrl] = useState(localStorage.getItem(STORAGE_KEYS.gasUrl) || "");
+  const [gasEdit, setGasEdit] = useState(false);
+  const [delConfirm, setDelConfirm] = useState(null);
+  const [delStatus, setDelStatus] = useState(null);
+  const [pinInput, setPinInput] = useState("");
+  const [pinNew, setPinNew] = useState("");
+  const savedPin = localStorage.getItem(STORAGE_KEYS.adminPin);
+
+  // PIN setup (first time)
+  if (!adminAuth && !savedPin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4" style={{ backgroundColor: "#FAF6F1", fontFamily: "'DM Sans', 'Noto Sans JP', sans-serif" }}>
+        <div style={{ maxWidth: 380, width: "100%" }}>
+          <FadeIn>
+            <div className="text-center mb-8">
+              <div className="w-12 h-12 mx-auto mb-4 rounded-xl flex items-center justify-center" style={{ backgroundColor: "rgba(91,14,45,0.06)", color: "#5B0E2D" }}>{AdminIcons.lock}</div>
+              <h2 style={{ fontSize: 22, fontWeight: 600, color: "#5B0E2D", fontFamily: "'Cormorant Garamond', serif", marginBottom: 8 }}>管理者PINの設定</h2>
+              <p style={{ fontSize: 12, color: "#8C7B72", lineHeight: 1.7 }}>初回のみ：管理者画面にアクセスするためのPIN（4桁以上）を設定してください</p>
+            </div>
+            <div className="space-y-3">
+              <input type="password" value={pinNew} onChange={e => setPinNew(e.target.value)} placeholder="PINを入力（4桁以上）" className="w-full p-3 rounded-xl text-center text-sm" style={{ border: "1px solid rgba(201,145,138,0.3)", backgroundColor: "#fff", letterSpacing: "0.2em", fontSize: 18 }} />
+              <button onClick={() => { if (pinNew.length >= 4) { localStorage.setItem(STORAGE_KEYS.adminPin, pinNew); setAdminAuth(true); } }} disabled={pinNew.length < 4} className="w-full py-3 rounded-xl font-semibold text-white transition-all" style={{ fontSize: 13, background: pinNew.length >= 4 ? "linear-gradient(135deg, #5B0E2D 0%, #8C3F5C 100%)" : "#ccc" }}>設定して管理者画面へ</button>
+              <button onClick={onBack} className="w-full py-2 text-center" style={{ fontSize: 12, color: "#999" }}>戻る</button>
+            </div>
+          </FadeIn>
+        </div>
+      </div>
+    );
+  }
+
+  // PIN auth
+  if (!adminAuth) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4" style={{ backgroundColor: "#FAF6F1", fontFamily: "'DM Sans', 'Noto Sans JP', sans-serif" }}>
+        <div style={{ maxWidth: 380, width: "100%" }}>
+          <FadeIn>
+            <div className="text-center mb-8">
+              <div className="w-12 h-12 mx-auto mb-4 rounded-xl flex items-center justify-center" style={{ backgroundColor: "rgba(91,14,45,0.06)", color: "#5B0E2D" }}>{AdminIcons.lock}</div>
+              <h2 style={{ fontSize: 22, fontWeight: 600, color: "#5B0E2D", fontFamily: "'Cormorant Garamond', serif", marginBottom: 8 }}>管理者認証</h2>
+              <p style={{ fontSize: 12, color: "#8C7B72" }}>PINを入力してください</p>
+            </div>
+            <div className="space-y-3">
+              <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="PIN" className="w-full p-3 rounded-xl text-center text-sm" style={{ border: `1px solid ${pinInput && pinInput !== savedPin && pinInput.length >= 4 ? "#B91C1C" : "rgba(201,145,138,0.3)"}`, backgroundColor: "#fff", letterSpacing: "0.2em", fontSize: 18 }} onKeyDown={e => { if (e.key === "Enter" && pinInput === savedPin) setAdminAuth(true); }} />
+              <button onClick={() => { if (pinInput === savedPin) setAdminAuth(true); }} className="w-full py-3 rounded-xl font-semibold text-white transition-all" style={{ fontSize: 13, background: "linear-gradient(135deg, #5B0E2D 0%, #8C3F5C 100%)" }}>認証</button>
+              <button onClick={onBack} className="w-full py-2 text-center" style={{ fontSize: 12, color: "#999" }}>戻る</button>
+            </div>
+          </FadeIn>
+        </div>
+      </div>
+    );
+  }
+
+  // Admin authenticated
+  const addStaff = () => {
+    const name = newName.trim();
+    if (!name) return;
+    const id = "s_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+    const newStaff = { id, name, registeredAt: new Date().toISOString() };
+    const updated = [...staffList, newStaff];
+    setStaffList(updated);
+    saveStaffList(updated);
+    saveStaffData(id, { done: {}, qDone: {}, qAns: {}, qSub: {}, wAns: {}, hints: {} });
+    setNewName("");
+  };
+
+  const deleteStaff = async (staff) => {
+    setDelStatus({ type: "sending", staffId: staff.id });
+    const data = loadStaffData(staff.id);
+    const payload = buildLogPayload(staff, data);
+    const url = localStorage.getItem(STORAGE_KEYS.gasUrl);
+    let logResult = { ok: true };
+    if (url) {
+      logResult = await sendLogToGAS(payload, url);
+    }
+    if (!url || logResult.ok) {
+      const updated = staffList.filter(s => s.id !== staff.id);
+      setStaffList(updated);
+      saveStaffList(updated);
+      removeStaffData(staff.id);
+      setDelConfirm(null);
+      setDelStatus({ type: "success", msg: url ? "ログ送信完了 — スタッフを削除しました" : "スタッフを削除しました（GAS URL未設定のためログ送信はスキップ）" });
+      setTimeout(() => setDelStatus(null), 4000);
+    } else {
+      setDelStatus({ type: "error", staffId: staff.id, msg: "ログ送信に失敗しました: " + logResult.error + "\n削除は中断されました。GAS URLを確認してください。" });
+    }
+  };
+
+  return (
+    <div className="min-h-screen" style={{ backgroundColor: "#FAF6F1", fontFamily: "'DM Sans', 'Noto Sans JP', sans-serif" }}>
+      <nav className="sticky top-0 z-40 backdrop-blur-xl" style={{ backgroundColor: "rgba(250,246,241,0.88)", borderBottom: "1px solid rgba(201,145,138,0.1)" }}>
+        <div className="max-w-3xl mx-auto px-4 py-3.5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span style={{ fontSize: 18, fontWeight: 600, color: "#5B0E2D", fontFamily: "'Cormorant Garamond', serif", letterSpacing: "0.08em" }}>HOLOGRAM</span>
+            <span className="px-1.5 py-0.5 rounded" style={{ fontSize: 8, fontWeight: 700, letterSpacing: "0.15em", backgroundColor: "rgba(91,14,45,0.12)", color: "#5B0E2D" }}>ADMIN</span>
+          </div>
+          <button onClick={onBack} className="flex items-center gap-1.5 transition-opacity hover:opacity-60" style={{ fontSize: 12, fontWeight: 500, color: "#C9918A" }}>
+            <div className="w-4 h-4">{AdminIcons.back}</div>戻る
+          </button>
+        </div>
+      </nav>
+
+      <div className="max-w-3xl mx-auto px-4 py-8">
+        {/* GAS URL Setting */}
+        <FadeIn>
+          <div className="rounded-2xl p-5 mb-8" style={{ backgroundColor: "#fff", border: "1px solid rgba(201,145,138,0.12)", boxShadow: "0 1px 3px rgba(91,14,45,0.04)" }}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5" style={{ color: "#5B0E2D" }}>{AdminIcons.settings}</div>
+                <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.06em", color: "#5B0E2D" }}>Google Apps Script URL</span>
+              </div>
+              <button onClick={() => setGasEdit(!gasEdit)} className="px-3 py-1 rounded-lg" style={{ fontSize: 11, fontWeight: 600, backgroundColor: "rgba(201,145,138,0.08)", color: "#5B0E2D" }}>{gasEdit ? "閉じる" : "設定"}</button>
+            </div>
+            <p style={{ fontSize: 11, color: "#8C7B72", lineHeight: 1.6 }}>{gasUrl ? "設定済み — スタッフ削除時にログがスプレッドシートに送信されます" : "未設定 — 設定するとスタッフ削除時にログがスプレッドシートに保存されます"}</p>
+            {gasEdit && <div className="mt-3 space-y-2">
+              <input type="text" value={gasUrl} onChange={e => setGasUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..." className="w-full p-3 rounded-xl text-sm" style={{ border: "1px solid rgba(201,145,138,0.3)", backgroundColor: "#FDFBF9", fontSize: 12 }} />
+              <button onClick={() => { localStorage.setItem(STORAGE_KEYS.gasUrl, gasUrl); setGasEdit(false); }} className="px-4 py-2 rounded-xl text-white" style={{ fontSize: 12, fontWeight: 600, background: "linear-gradient(135deg, #5B0E2D 0%, #8C3F5C 100%)" }}>保存</button>
+            </div>}
+          </div>
+        </FadeIn>
+
+        {/* Add Staff */}
+        <FadeIn delay={80}>
+          <div className="rounded-2xl p-5 mb-8" style={{ backgroundColor: "#fff", border: "1px solid rgba(201,145,138,0.12)", boxShadow: "0 1px 3px rgba(91,14,45,0.04)" }}>
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-5 h-5" style={{ color: "#5B0E2D" }}>{AdminIcons.plus}</div>
+              <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.06em", color: "#5B0E2D" }}>スタッフ登録</span>
+            </div>
+            <div className="flex gap-2">
+              <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="スタッフ名を入力" className="flex-1 p-3 rounded-xl text-sm" style={{ border: "1px solid rgba(201,145,138,0.3)", backgroundColor: "#FDFBF9" }} onKeyDown={e => { if (e.key === "Enter") addStaff(); }} />
+              <button onClick={addStaff} disabled={!newName.trim()} className="px-5 py-3 rounded-xl text-white transition-all" style={{ fontSize: 13, fontWeight: 600, background: newName.trim() ? "linear-gradient(135deg, #5B0E2D 0%, #8C3F5C 100%)" : "#ccc" }}>登録</button>
+            </div>
+          </div>
+        </FadeIn>
+
+        {/* Status Messages */}
+        {delStatus && delStatus.type === "success" && <FadeIn><div className="mb-6 p-4 rounded-xl" style={{ backgroundColor: "rgba(4,120,87,0.06)", border: "1px solid rgba(4,120,87,0.15)", fontSize: 13, color: "#047857" }}>{delStatus.msg}</div></FadeIn>}
+        {delStatus && delStatus.type === "error" && <FadeIn><div className="mb-6 p-4 rounded-xl whitespace-pre-wrap" style={{ backgroundColor: "rgba(185,28,28,0.04)", border: "1px solid rgba(185,28,28,0.15)", fontSize: 13, color: "#B91C1C" }}>{delStatus.msg}</div></FadeIn>}
+
+        {/* Staff List */}
+        <FadeIn delay={160}>
+          <div className="rounded-2xl overflow-hidden" style={{ backgroundColor: "#fff", border: "1px solid rgba(201,145,138,0.12)", boxShadow: "0 1px 3px rgba(91,14,45,0.04)" }}>
+            <div className="flex items-center gap-2 px-5 py-4" style={{ borderBottom: "1px solid rgba(201,145,138,0.08)" }}>
+              <div className="w-5 h-5" style={{ color: "#5B0E2D" }}>{AdminIcons.users}</div>
+              <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.06em", color: "#5B0E2D" }}>登録スタッフ一覧</span>
+              <span className="px-2 py-0.5 rounded-full" style={{ fontSize: 10, fontWeight: 700, backgroundColor: "rgba(201,145,138,0.1)", color: "#5B0E2D" }}>{staffList.length}</span>
+            </div>
+            {staffList.length === 0 && <div className="text-center py-10" style={{ fontSize: 13, color: "#bbb" }}>登録されたスタッフはいません</div>}
+            {staffList.map((s, i) => {
+              const sd = loadStaffData(s.id);
+              const lc = Object.keys(sd.done || {}).length;
+              const qc = Object.keys(sd.qDone || {}).length;
+              const wc = Object.values(sd.wAns || {}).filter(v => v && v.length > 0).length;
+              const isConfirming = delConfirm === s.id;
+              const isSending = delStatus && delStatus.type === "sending" && delStatus.staffId === s.id;
+              return (
+                <div key={s.id} className="px-5 py-4" style={{ borderBottom: i < staffList.length - 1 ? "1px solid rgba(201,145,138,0.06)" : "none" }}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ backgroundColor: "rgba(201,145,138,0.1)", color: "#5B0E2D", fontSize: 13, fontWeight: 700 }}>{s.name.charAt(0)}</div>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: "#1A1A1A" }}>{s.name}</div>
+                        <div style={{ fontSize: 11, color: "#999" }}>Lessons {lc}/{totalL} · Tests {qc}/{totalQ} · 記述 {wc}件 · 登録: {new Date(s.registeredAt).toLocaleDateString("ja-JP")}</div>
+                      </div>
+                    </div>
+                    {!isConfirming ? (
+                      <button onClick={() => { setDelConfirm(s.id); setDelStatus(null); }} className="w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:bg-red-50" style={{ color: "#ccc" }} onMouseEnter={e => e.currentTarget.style.color = "#B91C1C"} onMouseLeave={e => e.currentTarget.style.color = "#ccc"}>
+                        <div className="w-4 h-4">{AdminIcons.trash}</div>
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        {isSending ? <span style={{ fontSize: 11, color: "#C9918A" }}>送信中...</span> : <>
+                          <button onClick={() => setDelConfirm(null)} className="px-3 py-1.5 rounded-lg" style={{ fontSize: 11, fontWeight: 600, border: "1px solid #ddd", color: "#999" }}>取消</button>
+                          <button onClick={() => deleteStaff(s)} className="px-3 py-1.5 rounded-lg text-white" style={{ fontSize: 11, fontWeight: 600, backgroundColor: "#B91C1C" }}>削除する</button>
+                        </>}
+                      </div>
+                    )}
+                  </div>
+                  {isConfirming && !isSending && <div className="mt-2 ml-12 p-2.5 rounded-lg" style={{ backgroundColor: "rgba(185,28,28,0.04)", border: "1px solid rgba(185,28,28,0.1)", fontSize: 11, color: "#B91C1C", lineHeight: 1.6 }}>{localStorage.getItem(STORAGE_KEYS.gasUrl) ? "削除前にログをスプレッドシートに送信します。本当に削除しますか？" : "GAS URLが未設定のため、ログは送信されません。本当に削除しますか？"}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </FadeIn>
+      </div>
+    </div>
+  );
+}
+
 // ── MAIN APP ──
 function App() {
+  const [staffList, setStaffList] = useState(loadStaffList);
+  const [currentStaff, setCurrentStaff] = useState(null);
+  const [appMode, setAppMode] = useState("select"); // "select" | "training" | "admin"
+  const [adminAuth, setAdminAuth] = useState(false);
+
   const [done, setDone] = useState({});
   const [qDone, setQDone] = useState({});
   const [qAns, setQAns] = useState({});
@@ -182,6 +491,24 @@ function App() {
   const [hints, setHints] = useState({});
   const [view, setView] = useState({ t: "home" });
   const [tab, setTab] = useState("lessons");
+
+  // Save staff progress whenever state changes
+  useEffect(() => {
+    if (currentStaff) {
+      saveStaffData(currentStaff.id, { done, qDone, qAns, qSub, wAns, hints });
+    }
+  }, [done, qDone, qAns, qSub, wAns, hints, currentStaff]);
+
+  const selectStaff = (staff) => {
+    const data = loadStaffData(staff.id);
+    setDone(data.done || {}); setQDone(data.qDone || {}); setQAns(data.qAns || {}); setQSub(data.qSub || {}); setWAns(data.wAns || {}); setHints(data.hints || {});
+    setCurrentStaff(staff); setView({ t: "home" }); setAppMode("training");
+  };
+
+  const logout = () => {
+    setCurrentStaff(null); setAppMode("select");
+    setDone({}); setQDone({}); setQAns({}); setQSub({}); setWAns({}); setHints({});
+  };
 
   const totalL = allLessons.length;
   const doneC = Object.keys(done).length;
@@ -398,6 +725,13 @@ function App() {
     );
   };
 
+  // ── STAFF SELECT / ADMIN are rendered as components below ──
+
+  if (appMode === "select") return <StaffSelectScreen staffList={staffList} totalL={totalL} totalQ={totalQ} onSelect={selectStaff} onAdmin={() => { setAdminAuth(false); setAppMode("admin"); }} />;
+  if (appMode === "admin") return <AdminPanel staffList={staffList} setStaffList={setStaffList} totalL={totalL} totalQ={totalQ} adminAuth={adminAuth} setAdminAuth={setAdminAuth} onBack={() => { setAdminAuth(false); setAppMode("select"); }} />;
+
+  // Below is the training view (only reached when appMode === "training")
+
   return (
     <div className="min-h-screen" style={{ backgroundColor: "#FAF6F1", fontFamily: "'DM Sans', 'Noto Sans JP', sans-serif", color: "#1A1A1A" }}>
       <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
@@ -412,7 +746,12 @@ function App() {
             <span style={{ fontSize: 18, fontWeight: 600, color: "#5B0E2D", fontFamily: "'Cormorant Garamond', serif", letterSpacing: "0.08em" }}>HOLOGRAM</span>
             <span className="px-1.5 py-0.5 rounded" style={{ fontSize: 8, fontWeight: 700, letterSpacing: "0.15em", backgroundColor: "rgba(201,145,138,0.12)", color: "#C9918A" }}>TRAINING</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4">
+            {currentStaff && <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center" style={{ backgroundColor: "rgba(201,145,138,0.15)", color: "#5B0E2D", fontSize: 10, fontWeight: 700 }}>{currentStaff.name.charAt(0)}</div>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#5B0E2D" }}>{currentStaff.name}</span>
+              <button onClick={logout} className="px-2 py-1 rounded-md transition-all hover:opacity-70" style={{ fontSize: 10, fontWeight: 600, color: "#C9918A", border: "1px solid rgba(201,145,138,0.2)" }}>退出</button>
+            </div>}
             <span style={{ fontSize: 11, fontWeight: 600, color: "#5B0E2D" }}>{doneC}/{totalL}</span>
             <div style={{ width: 64 }}><ProgressBar current={doneC} total={totalL} /></div>
           </div>
